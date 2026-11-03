@@ -24,7 +24,10 @@ export default defineConfig({
 			},
 
 			// The site is published on Vercel by the teacher.dev Sites scripts.
-			adapter: adapter()
+			// Pin the function runtime explicitly. Left to infer, the adapter derives it
+			// from the build machine's Node version, which fails on versions newer than
+			// Vercel supports (e.g. Node 26 on the Vercel build image).
+			adapter: adapter({ runtime: 'nodejs22.x' })
 		})
 	]
 });
