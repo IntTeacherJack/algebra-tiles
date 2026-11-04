@@ -1,581 +1,324 @@
 <script lang="ts">
-	// The teacher's page: every activity as a card with a worked example drawn
-	// in tiles. On a wide screen the page is two panels the height of the
-	// window: the cards scroll on their own, and the chosen one's details stay
-	// put beside them. On a narrow one, tapping a card slides them up in a drawer. Either
-	// way, Set up goes to the activity's own page to make an activity link.
-	import { Plus, X } from '@lucide/svelte';
-	import { onMount, tick, untrack } from 'svelte';
-	import { pushState } from '$app/navigation';
-	import { resolve } from '$app/paths';
-	import { page } from '$app/state';
-	import { prettyText, type Activity } from '$lib/algebra';
-	import { ACTIVITIES, activityInfo, type ActivityInfo } from '$lib/activities';
-	import ActivityPicture from '$lib/ActivityPicture.svelte';
-	import EmailDialog from '$lib/EmailDialog.svelte';
-	import Footer from '$lib/Footer.svelte';
-	import favicon from '$lib/assets/favicon.svg';
+	import { Check, Eye, EyeOff, RefreshCw, RotateCcw, Settings2, Sparkles } from '@lucide/svelte';
 
-	let suggest = $state<EmailDialog>();
-	const IDEA_BODY = "Here's something I'd like students to do with algebra tiles:\n\n";
+	type Level = 'one' | 'negative' | 'two';
+	type PracticeMode = 'guided' | 'challenge';
+	type Problem = {
+		expression: string;
+		values: { name: string; value: number }[];
+		terms: { coefficient: number; variable: string }[];
+		constant: number;
+		substitution: string;
+		combine: string;
+		answer: number;
+		steps: string[];
+	};
 
-	/** Whether the details sit beside the cards, or come up in a drawer. */
-	let wide = $state(false);
-	/** The activity whose details show beside the cards, on a wide screen. */
-	let chosen = $state<Activity>(ACTIVITIES[0].activity);
-	onMount(() => {
-		const query = window.matchMedia('(min-width: 1024px)');
-		const update = () => (wide = query.matches);
-		update();
-		query.addEventListener('change', update);
-		return () => query.removeEventListener('change', update);
-	});
+	const random = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+	const sign = (value: number) => (value < 0 ? '−' : '+');
+	const absolute = (value: number) => Math.abs(value);
+	const signed = (value: number) => `${sign(value)} ${absolute(value)}`;
 
-	function pick(a: Activity) {
-		if (wide) chosen = a;
-		// The drawer is a step in the browser's history, so Back closes it.
-		else pushState('', { sheet: a });
-	}
-
-	// --- the drawer, on narrow screens ---
-
-	let sheet = $state<HTMLDialogElement>();
-	/** The activity the drawer shows, kept while it slides away. */
-	let shown = $state<Activity | null>(null);
-	/** Up on screen, as opposed to sliding in or out. */
-	let up = $state(false);
-	/** How far the drawer has been dragged down, in pixels. */
-	let drag = $state(0);
-	let dragging = $state(false);
-	const wanted = $derived(page.state.sheet ?? null);
-	const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-	$effect(() => {
-		const a = wanted;
-		untrack(() => {
-			if (a) open(a);
-			else if (shown) slideAway();
-		});
-	});
-	// Widening the window with the drawer open shows its activity beside the cards instead.
-	$effect(() => {
-		if (wide && wanted) {
-			chosen = wanted;
-			history.back();
+	function makeProblem(level: Level): Problem {
+		const coefficient = random(2, 6);
+		if (level === 'two') {
+			const secondCoefficient = random(2, 5);
+			const x = random(2, 8);
+			const y = random(2, 8);
+			const constant = random(-9, 9) || 4;
+			const firstPart = coefficient * x;
+			const secondPart = secondCoefficient * y;
+			const answer = firstPart + secondPart + constant;
+			return {
+				expression: `${coefficient}x + ${secondCoefficient}y ${signed(constant)}`,
+				values: [
+					{ name: 'x', value: x },
+					{ name: 'y', value: y }
+				],
+				terms: [
+					{ coefficient, variable: 'x' },
+					{ coefficient: secondCoefficient, variable: 'y' }
+				],
+				constant,
+				substitution: `${coefficient}(${x}) + ${secondCoefficient}(${y}) ${signed(constant)}`,
+				combine: `${firstPart} + ${secondPart} ${signed(constant)}`,
+				answer,
+				steps: ['Read the values for x and y.', 'Substitute both values.', 'Multiply.', 'Add or subtract.', 'State the answer.']
+			};
 		}
-	});
 
-	async function open(a: Activity) {
-		shown = a;
-		drag = 0;
-		await tick();
-		if (!sheet?.open) sheet?.showModal();
-		requestAnimationFrame(() => (up = true));
-	}
-
-	function slideAway() {
-		up = false;
-		const done = () => {
-			sheet?.close();
-			shown = null;
-			drag = 0;
+		const x = level === 'negative' ? random(-8, 8) || -3 : random(2, 9);
+		const constant = level === 'negative' ? random(-12, 12) || -5 : random(2, 12);
+		const product = coefficient * x;
+		const answer = product + constant;
+		return {
+			expression: `${coefficient}x ${signed(constant)}`,
+			values: [{ name: 'x', value: x }],
+			terms: [{ coefficient, variable: 'x' }],
+			constant,
+			substitution: `${coefficient}(${x}) ${signed(constant)}`,
+			combine: `${product} ${signed(constant)}`,
+			answer,
+			steps: ['Read the value of x.', 'Substitute the value for x.', 'Multiply.', 'Add or subtract.', 'State the answer.']
 		};
-		if (reduced()) done();
-		else setTimeout(done, 260);
 	}
 
-	/** Close from inside the page: step back past the drawer's history entry. */
-	function close() {
-		if (page.state.sheet) history.back();
+	let level = $state<Level>('one');
+	let mode = $state<PracticeMode>('guided');
+	let problem = $state<Problem>(makeProblem('one'));
+	let complete = $state<boolean[]>(Array(5).fill(false));
+	let revealed = $state(false);
+	let settingsOpen = $state(false);
+	let problemNumber = $state(1);
+	let substitutionAnswers = $state<Record<string, string>>({});
+	let substitutionFeedback = $state<'idle' | 'correct' | 'incorrect'>('idle');
+
+	function nextProblem() {
+		problem = makeProblem(level);
+		complete = Array(5).fill(false);
+		revealed = false;
+		substitutionAnswers = {};
+		substitutionFeedback = 'idle';
+		problemNumber += 1;
 	}
 
-	let dragFrom = 0;
-	function grab(e: PointerEvent) {
-		if ((e.target as HTMLElement).closest('button')) return;
-		dragging = true;
-		dragFrom = e.clientY;
-		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+	function resetBoard() {
+		complete = Array(5).fill(false);
+		revealed = false;
+		substitutionAnswers = {};
+		substitutionFeedback = 'idle';
 	}
-	function pull(e: PointerEvent) {
-		if (dragging) drag = Math.max(0, e.clientY - dragFrom);
+
+	function toggleStep(index: number) {
+		if (index === 1) return;
+		complete[index] = !complete[index];
 	}
-	function release() {
-		if (!dragging) return;
-		dragging = false;
-		if (drag > 80) close();
-		else drag = 0;
+
+	function checkSubstitution() {
+		const correct = problem.values.every(
+			(variable) => substitutionAnswers[variable.name]?.trim() === String(variable.value)
+		);
+		substitutionFeedback = correct ? 'correct' : 'incorrect';
+		if (correct) complete[1] = true;
+	}
+
+	function editSubstitution() {
+		substitutionFeedback = 'idle';
+		complete[1] = false;
+	}
+
+	function revealNext() {
+		const next = complete.findIndex((done) => !done);
+		if (next === -1) revealed = true;
+		else if (next === 1) {
+			for (const variable of problem.values) substitutionAnswers[variable.name] = String(variable.value);
+			substitutionFeedback = 'correct';
+			complete[next] = true;
+		} else complete[next] = true;
 	}
 </script>
 
 <svelte:head>
-	<title>Algebra Tiles · Activities with algebra tiles</title>
+	<title>Substitution Board · Algebra Tiles</title>
+	<meta
+		name="description"
+		content="A teacher-led substitution practice board for grade 7 math classrooms."
+	/>
 </svelte:head>
 
-{#snippet details(info: ActivityInfo, large: boolean)}
-	<div class="details-picture">
-		<ActivityPicture activity={info.activity} scale={large ? 0.56 : 0.66} />
-	</div>
-	<h2 id="details-{large ? 'panel' : 'sheet'}-title">{info.name}</h2>
-	<p class="tagline">{info.tagline}</p>
-	<h3>What students do</h3>
-	<ol class="steps">
-		{#each info.steps as step, i (i)}<li>{step}</li>{/each}
-	</ol>
-	<h3>Problems like</h3>
-	<ul class="problems">
-		{#each info.problemsLike as p (p)}<li>{prettyText(p)}</li>{/each}
-	</ul>
-{/snippet}
-
-<div class="page">
-	<div class="cards-side">
-		<header>
-			<p class="brand"><img src={favicon} alt="" width="40" height="40" /> Algebra Tiles</p>
-			<h1>Choose an activity</h1>
-			<p class="lede">Type one problem, then share the activity link with your students.</p>
-		</header>
-
-		<section class="cards" aria-label="Activities">
-			<ul class="grid">
-				{#each ACTIVITIES as a (a.activity)}
-					<li>
-						<button
-							type="button"
-							class="card"
-							class:on={chosen === a.activity}
-							aria-pressed={wide ? chosen === a.activity : undefined}
-							aria-haspopup={wide ? undefined : 'dialog'}
-							onclick={() => pick(a.activity)}
-						>
-							<span class="card-picture"><ActivityPicture activity={a.activity} scale={0.4} /></span
-							>
-							<span class="name">{a.name}</span>
-							<span class="about">{a.tagline}</span>
-						</button>
-					</li>
-				{/each}
-				<li>
-					<button
-						type="button"
-						class="suggest"
-						aria-haspopup="dialog"
-						onclick={() => suggest?.open()}
-					>
-						<span class="plus"><Plus size={22} aria-hidden="true" /></span>
-						<span class="name">Suggest another activity</span>
-						<span class="about">Want students doing something else with tiles? Tell us.</span>
-					</button>
-				</li>
-			</ul>
-		</section>
-	</div>
-
-	<!-- On a wide screen, the chosen activity's details, staying put beside the cards. -->
-	<aside class="panel" aria-labelledby="details-panel-title">
-		<div class="panel-body">{@render details(activityInfo(chosen), true)}</div>
-		<a class="setup" href={resolve(`/${chosen}`)}>Set up {activityInfo(chosen).name} ▸</a>
-	</aside>
-
-	<Footer />
-</div>
-
-<!-- On a narrow screen, the details slide up from the bottom. -->
-<dialog
-	bind:this={sheet}
-	class="sheet"
-	class:up
-	class:dragging
-	style:--drag="{drag}px"
-	aria-labelledby="details-sheet-title"
-	oncancel={(e) => {
-		e.preventDefault();
-		close();
-	}}
-	onclick={(e) => e.target === sheet && close()}
->
-	{#if shown}
-		{@const info = activityInfo(shown)}
-		<!-- svelte-ignore a11y_no_static_element_interactions (dragging is extra: the close button, Escape and Back close it too) -->
-		<div
-			class="grab"
-			onpointerdown={grab}
-			onpointermove={pull}
-			onpointerup={release}
-			onpointercancel={release}
-		>
-			<span class="handle" aria-hidden="true"></span>
-			<button type="button" class="close" aria-label="Close" onclick={close}>
-				<X size={20} />
+<main class="board">
+	<header class="topbar">
+		<a class="brand" href="/" aria-label="Substitution Board home">
+			<span class="brand-mark" aria-hidden="true">x</span>
+			<span>Substitution Board</span>
+		</a>
+		<div class="topbar-actions">
+			<span class="call-up"><Sparkles size={17} aria-hidden="true" /> Teacher call-up</span>
+			<button class="icon-button" type="button" aria-label="Show or hide teacher settings" onclick={() => (settingsOpen = !settingsOpen)}>
+				<Settings2 size={21} />
 			</button>
 		</div>
-		<div class="sheet-body">
-			{@render details(info, false)}
-		</div>
-		<div class="sheet-foot">
-			<a class="setup" href={resolve(`/${info.activity}`)}>Set up {info.name} ▸</a>
-		</div>
-	{/if}
-</dialog>
+	</header>
 
-<EmailDialog
-	bind:this={suggest}
-	title="Suggest an activity"
-	subject="Algebra Tiles activity idea"
-	body={IDEA_BODY}
->
-	<p>
-		So far students can multiply and factor polynomials and solve equations. What else would you
-		like them to do with algebra tiles? Completing the square, something else? Email us your idea
-		and we’ll look at adding it.
-	</p>
-</EmailDialog>
+	{#if settingsOpen}
+		<section class="settings" aria-label="Teacher settings">
+			<div>
+				<p class="eyebrow">Problem type</p>
+				<div class="choice-row" role="group" aria-label="Choose problem type">
+					<button class:chosen={level === 'one'} type="button" onclick={() => { level = 'one'; nextProblem(); }}>One variable</button>
+					<button class:chosen={level === 'negative'} type="button" onclick={() => { level = 'negative'; nextProblem(); }}>Negative values</button>
+					<button class:chosen={level === 'two'} type="button" onclick={() => { level = 'two'; nextProblem(); }}>Two variables</button>
+				</div>
+			</div>
+			<div>
+				<p class="eyebrow">Display</p>
+				<div class="choice-row" role="group" aria-label="Choose display mode">
+					<button class:chosen={mode === 'guided'} type="button" onclick={() => (mode = 'guided')}>Guided steps</button>
+					<button class:chosen={mode === 'challenge'} type="button" onclick={() => (mode = 'challenge')}>Answer challenge</button>
+				</div>
+			</div>
+		</section>
+	{/if}
+
+	<section class="hero" aria-labelledby="problem-heading">
+		<div class="problem-label">
+			<span>Today’s problem</span>
+			<span class="number">#{String(problemNumber).padStart(2, '0')}</span>
+		</div>
+		<h1 id="problem-heading">Evaluate the expression</h1>
+		<div class="expression" aria-label={`Expression: ${problem.expression}`}>{problem.expression}</div>
+		<div class="value-cards" aria-label="Variable values">
+			{#each problem.values as variable (variable.name)}
+				<div class="value-card"><span>{variable.name}</span><strong>= {variable.value}</strong></div>
+			{/each}
+		</div>
+		<p class="prompt">Say what you replace <strong>each variable</strong> with before you calculate.</p>
+	</section>
+
+	<section class="work-area" aria-labelledby="steps-heading">
+		<div class="steps-heading">
+			<div>
+				<p class="eyebrow">Classroom checklist</p>
+				<h2 id="steps-heading">Work through the steps</h2>
+			</div>
+			<p class="progress" aria-live="polite">{complete.filter(Boolean).length} of {problem.steps.length} checked</p>
+		</div>
+
+		<ol class="steps">
+			{#each problem.steps as step, index (step)}
+				<li class:done={complete[index]}>
+					{#if index === 1}
+						<span class:complete-mark={complete[index]} class="step-number" aria-hidden="true">
+							{#if complete[index]}<Check size={22} strokeWidth={3} />{:else}{index + 1}{/if}
+						</span>
+					{:else}
+						<button
+							type="button"
+							class="check"
+							aria-label={`${complete[index] ? 'Uncheck' : 'Check'} step ${index + 1}: ${step}`}
+							aria-pressed={complete[index]}
+							onclick={() => toggleStep(index)}
+						>
+							{#if complete[index]}<Check size={22} strokeWidth={3} />{:else}<span>{index + 1}</span>{/if}
+						</button>
+					{/if}
+					<div class="step-copy">
+						<strong>{step}</strong>
+						{#if index === 1 && mode === 'guided'}
+							<div class="substitution-area">
+								<div class="substitution-equation" aria-label="Enter the values to substitute">
+									{#each problem.terms as term, termIndex (term.variable)}
+										{#if termIndex > 0}<span>+</span>{/if}
+										<span>{term.coefficient}(</span>
+										<input
+											bind:value={substitutionAnswers[term.variable]}
+											class:correct={substitutionFeedback === 'correct'}
+											class:incorrect={substitutionFeedback === 'incorrect'}
+											aria-label={`Value substituted for ${term.variable}`}
+											inputmode="numeric"
+											oninput={editSubstitution}
+											onkeydown={(event) => event.key === 'Enter' && checkSubstitution()}
+										/>
+										<span>)</span>
+									{/each}
+									<span>{signed(problem.constant)}</span>
+								</div>
+								<div class="substitution-actions">
+									<button type="button" class="check-substitution" onclick={checkSubstitution}>Check substitution</button>
+									{#if substitutionFeedback === 'incorrect'}<span class="feedback incorrect-text">Try those value cards again.</span>{/if}
+									{#if substitutionFeedback === 'correct'}<span class="feedback correct-text">Correct substitution!</span>{/if}
+								</div>
+							</div>
+						{:else if mode === 'guided' && (index === 2 || index === 3 || index === 4) && (revealed || complete[index])}
+							<span class="working">
+								{index === 2 ? problem.combine : index === 3 ? `${problem.answer}` : `The value is ${problem.answer}.`}
+							</span>
+						{/if}
+					</div>
+				</li>
+			{/each}
+		</ol>
+
+		{#if mode === 'challenge' && revealed}
+			<div class="answer-reveal" aria-live="polite"><span>Answer</span><strong>{problem.answer}</strong></div>
+		{:else if mode === 'guided' && revealed}
+			<div class="answer-reveal" aria-live="polite"><span>Final value</span><strong>{problem.answer}</strong></div>
+		{/if}
+	</section>
+
+	<footer class="controls">
+		<button class="secondary-control" type="button" onclick={resetBoard}><RotateCcw size={19} /> Reset checks</button>
+		<div class="primary-controls">
+			<button class="reveal" type="button" onclick={revealNext}>
+				{#if revealed}<EyeOff size={19} />{:else}<Eye size={19} />{/if}
+				{revealed ? 'Answer shown' : complete.every(Boolean) ? 'Show answer' : 'Check next step'}
+			</button>
+			<button class="next" type="button" onclick={nextProblem}>New problem <RefreshCw size={19} /></button>
+		</div>
+	</footer>
+</main>
 
 <style>
-	/* The footer sits at the bottom of the window, or below the cards when
-	   they're taller than it. */
-	.page {
-		display: flex;
-		flex-direction: column;
-		min-height: 100dvh;
-		max-width: 72rem;
-		margin: 0 auto;
-		padding: 2rem 1.25rem 1.5rem;
-	}
-	.cards-side {
-		flex: 1;
-	}
-	.brand {
-		display: flex;
-		align-items: center;
-		gap: 0.6rem;
-		color: var(--accent);
-		font-size: 1.85rem;
-		font-weight: 800;
-		letter-spacing: -0.01em;
-	}
-	h1 {
-		margin-top: 1rem;
-		font-size: 1.6rem;
-		font-weight: 700;
-		line-height: 1.15;
-	}
-	.lede {
-		max-width: 44rem;
-		margin-top: 0.4rem;
-		color: var(--muted);
-		line-height: 1.5;
-	}
-	.cards {
-		margin-top: 1.5rem;
-	}
-	.panel {
-		display: none;
-	}
-	.grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
-		gap: 0.75rem;
-		padding: 0;
-		list-style: none;
-	}
-	.grid li {
-		display: flex;
-	}
-	.card,
-	.suggest {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-		width: 100%;
-		padding: 0.75rem;
-		border-radius: 14px;
-		color: var(--ink);
-		font: inherit;
-		text-align: left;
-		cursor: pointer;
-	}
-	.card {
-		border: 2px solid var(--line);
-		background: var(--paper);
-		box-shadow: 0 1px 2px rgb(29 40 56 / 0.06);
-		transition:
-			border-color 0.15s,
-			transform 0.15s;
-	}
-	.card:hover {
-		border-color: var(--line-strong);
-		transform: translateY(-2px);
-	}
-	.card-picture {
-		display: grid;
-		place-items: center;
-		margin-bottom: 0.35rem;
-		padding: 0.6rem 0.4rem;
-		border-radius: 9px;
-		background: var(--ground);
-	}
-	.name {
-		font-size: 1.1rem;
-		font-weight: 700;
-	}
-	.about {
-		color: var(--muted);
-		font-size: 0.88rem;
-		line-height: 1.4;
-	}
-	/* Asking for a kind of activity we don't have yet, the same size as the others. */
-	.suggest {
-		align-items: center;
-		justify-content: center;
-		border: 2px dashed var(--line-strong);
-		background: none;
-		text-align: center;
-	}
-	.suggest:hover {
-		border-color: var(--accent);
-		background: var(--accent-wash);
-	}
-	.plus {
-		display: grid;
-		place-items: center;
-		width: 2.6rem;
-		height: 2.6rem;
-		margin-bottom: 0.3rem;
-		border-radius: 50%;
-		background: var(--accent-wash);
-		color: var(--accent);
-	}
-	/* On a wide screen, two panels the height of the window, and the page
-	   itself doesn't scroll: the cards scroll on their own, on the left, and
-	   the details stay put on the right, scrolling inside only when they're
-	   taller than the window, with Set up always at the bottom. */
-	@media (min-width: 1024px) {
-		.page {
-			display: grid;
-			grid-template-columns: minmax(0, 1fr) 26rem;
-			grid-template-rows: minmax(0, 1fr) auto;
-			max-width: 90rem;
-			height: 100dvh;
-			min-height: 0;
-			padding: 0;
-			overflow: hidden;
-		}
-		/* Below both panels, along the bottom of the window. */
-		.page.page > :global(footer) {
-			grid-column: 1 / -1;
-			margin: 0;
-			padding: 0.6rem 1rem 0.8rem;
-			border-top: 1px solid var(--line);
-		}
-		.cards-side {
-			min-height: 0;
-			padding: 2rem 1.5rem 1.5rem 2rem;
-			overflow-y: auto;
-		}
-		.grid {
-			grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-			gap: 1rem;
-		}
-		.card-picture {
-			--picture-scale: 0.55;
-		}
-		.card.on {
-			border-color: var(--accent);
-			background: var(--accent-wash);
-		}
-		.panel {
-			display: flex;
-			flex-direction: column;
-			/* The column's full height whichever activity is chosen, so Set up
-			   stays in the same place at the bottom. */
-			min-height: 0;
-			margin: 1.25rem 1.25rem 1.25rem 0;
-			padding: 1.25rem;
-			border: 1px solid var(--line);
-			border-radius: 14px;
-			background: var(--paper);
-			box-shadow: 0 6px 24px rgb(29 40 56 / 0.08);
-		}
-		.panel-body {
-			flex: 1;
-			min-height: 0;
-			margin: -0.25rem;
-			padding: 0.25rem;
-			overflow-y: auto;
-		}
-		.panel .setup {
-			flex: none;
-			margin-top: 0.85rem;
-		}
-	}
-
-	/* In a short window, the panel's picture is smaller, so the details fit. */
-	@media (min-width: 1024px) and (max-height: 860px) {
-		.panel .details-picture {
-			--picture-scale: 0.42;
-		}
-	}
-	@media (min-width: 1024px) and (max-height: 700px) {
-		.panel .details-picture {
-			--picture-scale: 0.32;
-		}
-	}
-
-	/* The details, beside the cards or in the drawer. */
-	.details-picture {
-		display: grid;
-		place-items: center;
-		padding: 0.75rem 0.5rem;
-		border-radius: 10px;
-		background: var(--ground);
-	}
-	h2 {
-		margin-top: 0.75rem;
-		font-size: 1.6rem;
-		font-weight: 700;
-	}
-	.tagline {
-		margin-top: 0.2rem;
-		color: var(--ink-soft);
-		line-height: 1.45;
-	}
-	h3 {
-		margin-top: 0.9rem;
-		color: var(--muted);
-		font-size: 0.75rem;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-	}
-	.steps {
-		display: grid;
-		gap: 0.4rem;
-		margin-top: 0.45rem;
-		padding-left: 1.3rem;
-		color: var(--ink-soft);
-		line-height: 1.45;
-		list-style: decimal;
-	}
-	.steps li::marker {
-		color: var(--accent);
-		font-weight: 700;
-	}
-	.problems {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-		margin-top: 0.45rem;
-		padding: 0;
-		list-style: none;
-	}
-	.problems li {
-		padding: 0.3rem 0.6rem;
-		border-radius: 7px;
-		background: var(--paper-low);
-		color: var(--ink-soft);
-		font-weight: 600;
-		white-space: nowrap;
-	}
-	.setup {
-		display: block;
-		padding: 0.85rem 1rem;
-		border-radius: 10px;
-		background: var(--accent);
-		color: var(--paper);
-		font-size: 1.05rem;
-		font-weight: 700;
-		text-align: center;
-		text-decoration: none;
-	}
-	.setup:hover {
-		background: var(--accent-dark);
-	}
-
-	/* The drawer: a sheet from the bottom of the window, over a dimmed page. */
-	.sheet {
-		position: fixed;
-		inset: auto 0 0 0;
-		width: 100%;
-		max-width: 40rem;
-		max-height: 88dvh;
-		margin: 0 auto;
-		padding: 0;
-		border: none;
-		border-radius: 18px 18px 0 0;
-		background: var(--paper);
-		color: var(--ink);
-		box-shadow: 0 -12px 40px rgb(29 40 56 / 0.2);
-		transform: translateY(100%);
-		transition: transform 0.26s cubic-bezier(0.2, 0.8, 0.3, 1);
-	}
-	.sheet[open] {
-		display: flex;
-		flex-direction: column;
-	}
-	.sheet.up {
-		transform: translateY(var(--drag));
-	}
-	.sheet.dragging {
-		transition: none;
-	}
-	.sheet::backdrop {
-		background: rgb(29 40 56 / 0.4);
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.sheet,
-		.card {
-			transition: none;
-		}
-	}
-	:global(html:has(dialog.sheet[open])) {
-		overflow: hidden;
-	}
-	.grab {
-		position: relative;
-		display: grid;
-		flex: none;
-		place-items: center;
-		height: 2.5rem;
-		cursor: grab;
-		touch-action: none;
-	}
-	.handle {
-		width: 2.75rem;
-		height: 5px;
-		border-radius: 3px;
-		background: var(--line-strong);
-	}
-	.close {
-		position: absolute;
-		top: 0.35rem;
-		right: 0.5rem;
-		display: grid;
-		place-items: center;
-		width: 2.2rem;
-		height: 2.2rem;
-		border: none;
-		border-radius: 8px;
-		background: none;
-		color: var(--muted);
-		cursor: pointer;
-	}
-	.close:hover {
-		background: var(--paper-low);
-	}
-	.sheet-body {
-		flex: 1;
-		min-height: 0;
-		padding: 0 1.25rem 1rem;
-		overflow-y: auto;
-		overscroll-behavior: contain;
-	}
-	.sheet-foot {
-		flex: none;
-		padding: 0.75rem 1.25rem calc(0.75rem + env(safe-area-inset-bottom));
-		border-top: 1px solid var(--line);
-		background: var(--paper);
-	}
-	.page :global(footer) {
-		margin-top: 2.5rem;
-	}
+	:global(body) { background: #edf2f6; }
+	.board { min-height: 100dvh; color: #172435; }
+	.topbar { display: flex; align-items: center; justify-content: space-between; min-height: 4.75rem; padding: 0 4vw; border-bottom: 1px solid #d6e0e8; background: rgb(255 255 255 / 0.9); }
+	.brand { display: inline-flex; align-items: center; gap: .65rem; color: #172435; font-size: 1.1rem; font-weight: 800; text-decoration: none; }
+	.brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: .55rem; background: #2764c5; color: white; font-family: Georgia, serif; font-size: 1.45rem; font-style: italic; font-weight: 700; }
+	.topbar-actions, .call-up, .primary-controls, .settings, .choice-row { display: flex; align-items: center; }
+	.topbar-actions { gap: 1rem; }
+	.call-up { gap: .4rem; color: #506477; font-size: .9rem; font-weight: 700; }
+	.icon-button { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border: 1px solid #c9d5df; border-radius: .55rem; background: white; color: #324c67; cursor: pointer; }
+	.icon-button:hover { background: #f2f6fa; }
+	.settings { justify-content: center; gap: 3rem; padding: 1rem 4vw; border-bottom: 1px solid #d6e0e8; background: #f9fbfd; }
+	.eyebrow { margin: 0 0 .45rem; color: #61778b; font-size: .72rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+	.choice-row { gap: .35rem; flex-wrap: wrap; }
+	.choice-row button { padding: .48rem .72rem; border: 1px solid #cad7e2; border-radius: .45rem; background: white; color: #425a70; font: inherit; font-size: .86rem; font-weight: 700; cursor: pointer; }
+	.choice-row button.chosen { border-color: #2764c5; background: #e6effe; color: #174b9f; }
+	.hero { display: grid; justify-items: center; padding: clamp(2.5rem, 6vw, 5rem) 1.25rem clamp(2rem, 4vw, 3.5rem); background: radial-gradient(circle at center, #f8fbff 0%, #eaf1f7 72%); text-align: center; }
+	.problem-label { display: flex; gap: .65rem; align-items: center; color: #55708a; font-size: .82rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+	.number { padding: .2rem .46rem; border-radius: 99px; background: #dce8f5; color: #315979; font-variant-numeric: tabular-nums; }
+	h1 { margin: .7rem 0 1.7rem; font-size: clamp(1.55rem, 3.2vw, 2.3rem); line-height: 1.1; }
+	.expression { padding: .55rem 1.15rem; color: #173862; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(3.5rem, 10vw, 7rem); font-weight: 600; letter-spacing: .02em; line-height: 1.1; }
+	.value-cards { display: flex; flex-wrap: wrap; justify-content: center; gap: .8rem; margin-top: 1.75rem; }
+	.value-card { min-width: 8.2rem; padding: .7rem 1.1rem; border: 1px solid #bdd0e3; border-radius: .7rem; background: white; box-shadow: 0 2px 5px rgb(40 74 110 / .06); color: #35536f; font-size: 1.1rem; }
+	.value-card span { margin-right: .35rem; font-family: Georgia, serif; font-size: 1.35rem; font-style: italic; }
+	.value-card strong { color: #173862; font-size: 1.35rem; }
+	.prompt { margin: 1.4rem 0 0; color: #526a80; font-size: 1.03rem; }
+	.work-area { width: min(100% - 2.5rem, 56rem); margin: 0 auto; padding: 2.5rem 0 8.5rem; }
+	.steps-heading { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: 1rem; }
+	h2 { margin: 0; font-size: clamp(1.35rem, 2.6vw, 1.85rem); }
+	.progress { margin: 0; color: #557087; font-size: .9rem; font-weight: 700; white-space: nowrap; }
+	.steps { display: grid; gap: .7rem; padding: 0; margin: 0; list-style: none; }
+	.steps li { display: flex; align-items: flex-start; gap: 1rem; min-height: 5.15rem; padding: 1rem 1.15rem; border: 1px solid #d3dfe8; border-radius: .8rem; background: white; box-shadow: 0 2px 4px rgb(28 57 89 / .035); transition: border-color .15s, background .15s; }
+	.steps li.done { border-color: #abd4bd; background: #f2faf5; }
+	.check, .step-number { display: grid; flex: none; place-items: center; width: 2.2rem; height: 2.2rem; padding: 0; border: 2px solid #a9bbca; border-radius: 50%; background: white; color: #4f667c; font: inherit; font-weight: 800; }
+	.check { cursor: pointer; }
+	.done .check, .complete-mark { border-color: #318456; background: #318456; color: white; }
+	.step-copy { display: grid; gap: .3rem; padding-top: .24rem; }
+	.step-copy strong { font-size: clamp(1rem, 2vw, 1.16rem); }
+	.working { color: #305b89; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(1.2rem, 3vw, 1.65rem); font-weight: 600; }
+	.substitution-area { display: grid; gap: .6rem; margin-top: .25rem; }
+	.substitution-equation { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; color: #204e7d; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(1.35rem, 3vw, 1.75rem); font-weight: 600; }
+	.substitution-equation input { width: 3.7rem; height: 2.3rem; border: 2px solid #9eb6cc; border-radius: .35rem; background: #fff; color: #173862; font: inherit; font-size: 1.25rem; font-weight: 700; text-align: center; outline-offset: 2px; }
+	.substitution-equation input:focus { border-color: #2764c5; outline: 2px solid #cbdcff; }
+	.substitution-equation input.correct { border-color: #318456; background: #f1faf4; }
+	.substitution-equation input.incorrect { border-color: #c44c3a; background: #fff4f1; }
+	.substitution-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .7rem; }
+	.check-substitution { min-height: 2.25rem; padding: 0 .8rem; border: 1px solid #2764c5; border-radius: .45rem; background: #2764c5; color: white; font: inherit; font-size: .9rem; font-weight: 800; cursor: pointer; }
+	.check-substitution:hover { background: #1e549f; }
+	.feedback { font-size: .9rem; font-weight: 750; }
+	.incorrect-text { color: #a23a2b; }
+	.correct-text { color: #287044; }
+	.answer-reveal { display: flex; align-items: baseline; justify-content: center; gap: 1rem; margin-top: 1rem; padding: 1.2rem; border: 2px solid #75b28e; border-radius: .8rem; background: #eaf7ef; color: #276542; }
+	.answer-reveal span { font-weight: 800; text-transform: uppercase; letter-spacing: .08em; font-size: .78rem; }
+	.answer-reveal strong { font-family: Georgia, serif; font-size: 2.2rem; }
+	.controls { position: fixed; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem 4vw calc(.85rem + env(safe-area-inset-bottom)); border-top: 1px solid #cfdae4; background: rgb(255 255 255 / .96); box-shadow: 0 -4px 18px rgb(27 57 90 / .08); backdrop-filter: blur(10px); }
+	.controls button { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; min-height: 2.75rem; border-radius: .55rem; font: inherit; font-weight: 800; cursor: pointer; }
+	.secondary-control { padding: 0 .9rem; border: 1px solid #c7d4df; background: white; color: #455f76; }
+	.primary-controls { gap: .65rem; }
+	.reveal { padding: 0 1rem; border: 1px solid #b7c9dc; background: #e9f1fa; color: #24527f; }
+	.next { padding: 0 1.1rem; border: 1px solid #1c559f; background: #2764c5; color: white; }
+	.next:hover { background: #1e549f; }
+	@media (max-width: 650px) { .call-up { display: none; } .settings { align-items: stretch; flex-direction: column; gap: 1rem; } .expression { font-size: clamp(3rem, 17vw, 5.5rem); } .controls { align-items: stretch; flex-direction: column-reverse; } .primary-controls { width: 100%; } .primary-controls button { flex: 1; } .secondary-control { width: 100%; } .work-area { padding-bottom: 11rem; } }
+	@media (prefers-reduced-motion: reduce) { .steps li { transition: none; } }
 </style>
