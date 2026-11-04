@@ -1,17 +1,16 @@
 <script lang="ts">
 	import { Check, Eye, EyeOff, RefreshCw, RotateCcw, Settings2, Sparkles } from '@lucide/svelte';
 
-	type Level = 'one' | 'negative' | 'two';
+	type Level = 'low' | 'medium' | 'high';
 	type PracticeMode = 'guided' | 'challenge';
+	type SubstitutionField = { prefix: string; variable: string; suffix: string };
+	type Step = { label: string; working?: string; substitution?: boolean };
 	type Problem = {
 		expression: string;
 		values: { name: string; value: number }[];
-		terms: { coefficient: number; variable: string }[];
-		constant: number;
-		substitution: string;
-		combine: string;
+		fields: SubstitutionField[];
 		answer: number;
-		steps: string[];
+		steps: Step[];
 	};
 
 	const random = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -21,7 +20,7 @@
 
 	function makeProblem(level: Level): Problem {
 		const coefficient = random(2, 6);
-		if (level === 'two') {
+		if (level === 'medium') {
 			const secondCoefficient = random(2, 5);
 			const x = random(2, 8);
 			const y = random(2, 8);
@@ -35,37 +34,89 @@
 					{ name: 'x', value: x },
 					{ name: 'y', value: y }
 				],
-				terms: [
-					{ coefficient, variable: 'x' },
-					{ coefficient: secondCoefficient, variable: 'y' }
+				fields: [
+					{ prefix: `${coefficient}(`, variable: 'x', suffix: `) + ${secondCoefficient}(` },
+					{ prefix: '', variable: 'y', suffix: `) ${signed(constant)}` }
 				],
-				constant,
-				substitution: `${coefficient}(${x}) + ${secondCoefficient}(${y}) ${signed(constant)}`,
-				combine: `${firstPart} + ${secondPart} ${signed(constant)}`,
 				answer,
-				steps: ['Read the values for x and y.', 'Substitute both values.', 'Multiply.', 'Add or subtract.', 'State the answer.']
+				steps: [
+					{ label: 'Read the values for x and y.' },
+					{ label: 'Substitute both values.', substitution: true },
+					{ label: 'Multiply.', working: `${firstPart} + ${secondPart} ${signed(constant)}` },
+					{ label: 'Add or subtract.', working: `${answer}` },
+					{ label: 'State the answer.', working: `The value is ${answer}.` }
+				]
 			};
 		}
 
-		const x = level === 'negative' ? random(-8, 8) || -3 : random(2, 9);
-		const constant = level === 'negative' ? random(-12, 12) || -5 : random(2, 12);
+		if (level === 'high') {
+			if (Math.random() < 0.5) {
+				const x = random(-5, 5) || 3;
+				const constant = random(-12, 12) || -4;
+				const square = x * x;
+				const product = coefficient * square;
+				const answer = product + constant;
+				return {
+					expression: `${coefficient}x² ${signed(constant)}`,
+					values: [{ name: 'x', value: x }],
+					fields: [{ prefix: `${coefficient}(`, variable: 'x', suffix: `)² ${signed(constant)}` }],
+					answer,
+					steps: [
+						{ label: 'Read the value of x.' },
+						{ label: 'Substitute the value for x.', substitution: true },
+						{ label: 'Evaluate the exponent.', working: `${coefficient}(${square}) ${signed(constant)}` },
+						{ label: 'Multiply.', working: `${product} ${signed(constant)}` },
+						{ label: 'Add or subtract.', working: `${answer}` },
+						{ label: 'State the answer.', working: `The value is ${answer}.` }
+					]
+				};
+			}
+			const divisor = random(2, 5);
+			const x = random(2, 7);
+			const product = coefficient * x;
+			const base = random(3, 12);
+			const adjustment = (divisor - ((product + base) % divisor)) % divisor;
+			const constant = base + adjustment;
+			const numerator = product + constant;
+			const answer = numerator / divisor;
+			return {
+				expression: `(${coefficient}x + ${constant}) ÷ ${divisor}`,
+				values: [{ name: 'x', value: x }],
+				fields: [{ prefix: `(${coefficient}(`, variable: 'x', suffix: `) + ${constant}) ÷ ${divisor}` }],
+				answer,
+				steps: [
+					{ label: 'Read the value of x.' },
+					{ label: 'Substitute the value for x.', substitution: true },
+					{ label: 'Multiply inside the parentheses.', working: `(${product} + ${constant}) ÷ ${divisor}` },
+					{ label: 'Add inside the parentheses.', working: `${numerator} ÷ ${divisor}` },
+					{ label: 'Divide.', working: `${answer}` },
+					{ label: 'State the answer.', working: `The value is ${answer}.` }
+				]
+			};
+		}
+
+		const x = random(2, 9);
+		const constant = random(2, 12);
 		const product = coefficient * x;
 		const answer = product + constant;
 		return {
 			expression: `${coefficient}x ${signed(constant)}`,
 			values: [{ name: 'x', value: x }],
-			terms: [{ coefficient, variable: 'x' }],
-			constant,
-			substitution: `${coefficient}(${x}) ${signed(constant)}`,
-			combine: `${product} ${signed(constant)}`,
+			fields: [{ prefix: `${coefficient}(`, variable: 'x', suffix: `) ${signed(constant)}` }],
 			answer,
-			steps: ['Read the value of x.', 'Substitute the value for x.', 'Multiply.', 'Add or subtract.', 'State the answer.']
+			steps: [
+				{ label: 'Read the value of x.' },
+				{ label: 'Substitute the value for x.', substitution: true },
+				{ label: 'Multiply.', working: `${product} ${signed(constant)}` },
+				{ label: 'Add.', working: `${answer}` },
+				{ label: 'State the answer.', working: `The value is ${answer}.` }
+			]
 		};
 	}
 
-	let level = $state<Level>('one');
+	let level = $state<Level>('low');
 	let mode = $state<PracticeMode>('guided');
-	let problem = $state<Problem>(makeProblem('one'));
+	let problem = $state<Problem>(makeProblem('low'));
 	let complete = $state<boolean[]>(Array(5).fill(false));
 	let revealed = $state(false);
 	let settingsOpen = $state(false);
@@ -75,7 +126,7 @@
 
 	function nextProblem() {
 		problem = makeProblem(level);
-		complete = Array(5).fill(false);
+		complete = Array(problem.steps.length).fill(false);
 		revealed = false;
 		substitutionAnswers = {};
 		substitutionFeedback = 'idle';
@@ -83,14 +134,14 @@
 	}
 
 	function resetBoard() {
-		complete = Array(5).fill(false);
+		complete = Array(problem.steps.length).fill(false);
 		revealed = false;
 		substitutionAnswers = {};
 		substitutionFeedback = 'idle';
 	}
 
 	function toggleStep(index: number) {
-		if (index === 1) return;
+		if (problem.steps[index].substitution) return;
 		complete[index] = !complete[index];
 	}
 
@@ -143,11 +194,11 @@
 	{#if settingsOpen}
 		<section class="settings" aria-label="Teacher settings">
 			<div>
-				<p class="eyebrow">Problem type</p>
-				<div class="choice-row" role="group" aria-label="Choose problem type">
-					<button class:chosen={level === 'one'} type="button" onclick={() => { level = 'one'; nextProblem(); }}>One variable</button>
-					<button class:chosen={level === 'negative'} type="button" onclick={() => { level = 'negative'; nextProblem(); }}>Negative values</button>
-					<button class:chosen={level === 'two'} type="button" onclick={() => { level = 'two'; nextProblem(); }}>Two variables</button>
+				<p class="eyebrow">Difficulty</p>
+				<div class="choice-row" role="group" aria-label="Choose difficulty level">
+					<button class:chosen={level === 'low'} type="button" onclick={() => { level = 'low'; nextProblem(); }}>Low · one variable</button>
+					<button class:chosen={level === 'medium'} type="button" onclick={() => { level = 'medium'; nextProblem(); }}>Medium · two variables</button>
+					<button class:chosen={level === 'high'} type="button" onclick={() => { level = 'high'; nextProblem(); }}>High · powers & division</button>
 				</div>
 			</div>
 			<div>
@@ -185,9 +236,9 @@
 		</div>
 
 		<ol class="steps">
-			{#each problem.steps as step, index (step)}
+			{#each problem.steps as step, index (step.label)}
 				<li class:done={complete[index]}>
-					{#if index === 1}
+					{#if step.substitution}
 						<span class:complete-mark={complete[index]} class="step-number" aria-hidden="true">
 							{#if complete[index]}<Check size={22} strokeWidth={3} />{:else}{index + 1}{/if}
 						</span>
@@ -195,7 +246,7 @@
 						<button
 							type="button"
 							class="check"
-							aria-label={`${complete[index] ? 'Uncheck' : 'Check'} step ${index + 1}: ${step}`}
+							aria-label={`${complete[index] ? 'Uncheck' : 'Check'} step ${index + 1}: ${step.label}`}
 							aria-pressed={complete[index]}
 							onclick={() => toggleStep(index)}
 						>
@@ -203,25 +254,23 @@
 						</button>
 					{/if}
 					<div class="step-copy">
-						<strong>{step}</strong>
-						{#if index === 1 && mode === 'guided'}
+						<strong>{step.label}</strong>
+						{#if step.substitution && mode === 'guided'}
 							<div class="substitution-area">
 								<div class="substitution-equation" aria-label="Enter the values to substitute">
-									{#each problem.terms as term, termIndex (term.variable)}
-										{#if termIndex > 0}<span>+</span>{/if}
-										<span>{term.coefficient}(</span>
+									{#each problem.fields as field (field.variable)}
+										<span>{field.prefix}</span>
 										<input
-											bind:value={substitutionAnswers[term.variable]}
+											bind:value={substitutionAnswers[field.variable]}
 											class:correct={substitutionFeedback === 'correct'}
 											class:incorrect={substitutionFeedback === 'incorrect'}
-											aria-label={`Value substituted for ${term.variable}`}
+											aria-label={`Value substituted for ${field.variable}`}
 											inputmode="numeric"
 											oninput={editSubstitution}
 											onkeydown={(event) => event.key === 'Enter' && checkSubstitution()}
 										/>
-										<span>)</span>
+										<span>{field.suffix}</span>
 									{/each}
-									<span>{signed(problem.constant)}</span>
 								</div>
 								<div class="substitution-actions">
 									<button type="button" class="check-substitution" onclick={checkSubstitution}>Check substitution</button>
@@ -229,9 +278,9 @@
 									{#if substitutionFeedback === 'correct'}<span class="feedback correct-text">Correct substitution!</span>{/if}
 								</div>
 							</div>
-						{:else if mode === 'guided' && (index === 2 || index === 3 || index === 4) && (revealed || complete[index])}
+						{:else if mode === 'guided' && step.working && (revealed || complete[index])}
 							<span class="working">
-								{index === 2 ? problem.combine : index === 3 ? `${problem.answer}` : `The value is ${problem.answer}.`}
+								{step.working}
 							</span>
 						{/if}
 					</div>
